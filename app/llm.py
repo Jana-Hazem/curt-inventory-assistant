@@ -16,7 +16,11 @@ DEFAULT_MODEL = "gemini-flash-latest"
 MAX_TOOL_ITERATIONS = 5        # max Gemini calls per user message (stops infinite loops)
 MAX_HISTORY_MESSAGES = 20      # per-session history cap
 MAX_SESSIONS = 500             # memory guard: oldest sessions are dropped first
-REQUEST_TIMEOUT_MS = 30_000
+REQUEST_TIMEOUT_MS = 45_000    # per attempt; overloaded models can be slow to answer
+RETRY_ATTEMPTS = 4             # total tries per Gemini call (1 + 3 retries)
+# Temporary Google-side failures worth retrying: 499 cancelled, 500/502 internal,
+# 503 overloaded ("high demand"), 504 deadline exceeded. 429 = rate limit.
+RETRYABLE_STATUS_CODES = (429, 499, 500, 502, 503, 504)
 
 SYSTEM_PROMPT = """You are the CURT Inventory Assistant.
 
@@ -48,6 +52,13 @@ def get_model() -> str:
     return os.getenv("GEMINI_MODEL", DEFAULT_MODEL)
 
 
+def get_fallback_model() -> str | None:
+    """Optional second model, used only if the primary is still failing after retries.
+    Set GEMINI_FALLBACK_MODEL in .env to enable it; unset means no fallback."""
+    value = os.getenv("GEMINI_FALLBACK_MODEL", "").strip()
+    return value if value and value != get_model() else None
+
+
 def get_client() -> genai.Client:
     global _client
     if _client is None:
@@ -58,7 +69,16 @@ def get_client() -> genai.Client:
             )
         _client = genai.Client(
             api_key=api_key,
-            http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+            http_options=types.HttpOptions(
+                timeout=REQUEST_TIMEOUT_MS,
+                retry_options=types.HttpRetryOptions(
+                    attempts=RETRY_ATTEMPTS,
+                    initial_delay=1.0,      # seconds before the first retry
+                    max_delay=8.0,
+                    exp_base=2.0,           # 1s, 2s, 4s ...
+                    http_status_codes=list(RETRYABLE_STATUS_CODES),
+                ),
+            ),
         )
     return _client
 
@@ -103,13 +123,35 @@ def _friendly_error(exc: Exception) -> str:
             return "The assistant is receiving too many requests right now. Please try again in a minute."
         if exc.code in (401, 403, 404) or "API_KEY_INVALID" in str(exc):
             return "The AI service rejected the request (check the API key and model name)."
-        if exc.code >= 500:
-            return "The AI service is temporarily unavailable. Please try again shortly."
+        if exc.code in RETRYABLE_STATUS_CODES or exc.code >= 500:
+            return ("The AI service is busy or timed out. Nothing was lost: "
+                    "please send your message again in a few seconds.")
     return "Sorry, something went wrong while contacting the AI service. Please try again."
 
 
 def _text_of(content: types.Content) -> str:
     return "".join(p.text for p in content.parts or [] if p.text and not p.thought).strip()
+
+
+def _is_transient(exc: Exception) -> bool:
+    return isinstance(exc, errors.APIError) and exc.code in RETRYABLE_STATUS_CODES
+
+
+def _generate(client: genai.Client, contents: list[types.Content],
+              config: types.GenerateContentConfig):
+    """One Gemini call. The SDK already retries transient errors; if the primary model
+    still fails and a fallback model is configured, try that model once."""
+    try:
+        return client.models.generate_content(
+            model=get_model(), contents=contents, config=config)
+    except Exception as exc:
+        fallback = get_fallback_model()
+        if fallback and _is_transient(exc):
+            logger.warning("Primary model %s failed (%s); trying fallback %s",
+                           get_model(), getattr(exc, "code", "?"), fallback)
+            return client.models.generate_content(
+                model=fallback, contents=contents, config=config)
+        raise
 
 
 # ---------- the tool-calling loop ----------
@@ -124,9 +166,7 @@ def chat(session_id: str, message: str, client: genai.Client | None = None) -> d
         config = _build_config()
 
         for _ in range(MAX_TOOL_ITERATIONS):
-            response = client.models.generate_content(
-                model=get_model(), contents=working, config=config
-            )
+            response = _generate(client, working, config)
             if not response.candidates or response.candidates[0].content is None:
                 return {"response": "I couldn't generate an answer. Please rephrase your question.",
                         "tool_calls": tool_log}
@@ -167,7 +207,8 @@ def main() -> None:
     get_client()                     # fails fast with a clear message if the key is missing
     init_db()
     seed_db()
-    print(f"CURT Inventory Assistant (Phase 2, model: {get_model()}). Type 'quit' to exit.")
+    print(f"CURT Inventory Assistant (Phase 2, model: {get_model()}, "
+          f"fallback: {get_fallback_model() or 'none'}). Type 'quit' to exit.")
     while True:
         try:
             question = input("> ")
