@@ -5,7 +5,7 @@ stock, location and category questions with plain rule-based parsing and no AI. 
 adds a Gemini-powered assistant with tool calling and per-session memory, served over a
 FastAPI backend with a Streamlit frontend.
 
-**Live demo:** [add your Railway URL here]
+**Live demo:** [https://mellow-cat-production-a455.up.railway.app/]
 
 **Technical Q&A:** [CURT_Generative_AI_Technical_Questions_Jana_Hazem.pdf](./CURT_Generative_AI_Technical_Questions_Jana_Hazem.pdf) — written answers to the code-review
 questions in this README's [Reflection](#reflection) section and the tool-calling flow.
