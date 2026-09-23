@@ -7,7 +7,7 @@ FastAPI backend with a Streamlit frontend.
 
 **Live demo:** [add your Railway URL here]
 
-**Technical Q&A:** [CURT_Generative_AI_Technical_Questions_Jana_Hazem.pdf] — written answers to the code-review
+**Technical Q&A:** [CURT_Generative_AI_Technical_Questions_Jana_Hazem.pdf](./CURT_Generative_AI_Technical_Questions_Jana_Hazem.pdf) — written answers to the code-review
 questions in this README's [Reflection](#reflection) section and the tool-calling flow.
 
 ## Contents
