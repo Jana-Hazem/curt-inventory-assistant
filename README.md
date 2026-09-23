@@ -5,7 +5,15 @@ stock, location and category questions with plain rule-based parsing and no AI. 
 adds a Gemini-powered assistant with tool calling and per-session memory, served over a
 FastAPI backend with a Streamlit frontend.
 
+**Live demo:** [add your Railway URL here]
+
+**Technical Q&A:** [add the link to your PDF here] — written answers to the code-review
+questions in this README's [Reflection](#reflection) section and the tool-calling flow.
+
 ## Contents
+
+- [Tech stack](#tech-stack)
+- [Project structure](#project-structure)
 
 - [Architecture](#architecture)
 - [Setup](#setup)
@@ -18,8 +26,55 @@ FastAPI backend with a Streamlit frontend.
 - [Reliability: retries and fallback model](#reliability-retries-and-fallback-model)
 - [Security notes](#security-notes)
 - [Testing](#testing)
+- [Deployment (bonus)](#deployment-bonus)
 - [Known limitations](#known-limitations)
 - [Reflection](#reflection)
+
+## Tech stack
+
+| Layer | Technology | Used for |
+|---|---|---|
+| Frontend | Streamlit | Chat UI, live inventory table, Phase 1/Phase 2 toggle |
+| Backend API | FastAPI + Pydantic | `POST /chat`, `GET /inventory`, `GET /health`; request validation |
+| LLM | Google Gemini (`google-genai` SDK) | Function calling, natural-language answers |
+| Database | SQLite | `parts` table, accessed only through `InventoryService` |
+| Matching | Python `difflib` | Fuzzy/partial part-name matching shared by both phases |
+| Testing | pytest, FastAPI `TestClient` | Service, Phase 1, Gemini loop (scripted fake client), API tests |
+| Deployment (bonus) | Railway | Hosts the FastAPI backend and/or Streamlit app |
+| Config | `python-dotenv` | Loads `GEMINI_API_KEY`, model names, and paths from `.env` |
+
+## Project structure
+
+```text
+curt_inventory_assistant/
+├── app/
+│   ├── __init__.py
+│   ├── db.py            # connection, schema creation, seeding
+│   ├── service.py       # InventoryService (ONLY place with SQL)
+│   ├── phase1.py         # rule-based parser + responder
+│   ├── tools.py          # tool functions + Gemini tool schemas
+│   ├── llm.py            # Gemini client, tool loop, session memory
+│   └── main.py           # FastAPI app
+├── tests/
+│   ├── conftest.py
+│   ├── test_service.py
+│   ├── test_phase1.py
+│   ├── test_api.py
+│   └── test_llm_fallback.py
+├── streamlit_app.py
+├── .env.example
+├── .gitignore
+├── requirements.txt
+└── README.md
+```
+
+**Dependency direction** (arrows point downward only, so nothing lower in the stack
+imports from something above it):
+
+```text
+Streamlit -> FastAPI -> llm.py -> tools.py -> service.py -> SQLite
+Streamlit -> phase1.py -> service.py -> SQLite
+```
 
 ## Architecture
 
@@ -263,6 +318,20 @@ python -m pytest -q
 Covers the service layer's matching logic, Phase 1's intent parsing, the Gemini tool loop
 (including the retry/fallback behavior, using a scripted fake client), and the FastAPI
 endpoints via `TestClient`.
+
+## Deployment (bonus)
+
+The app is deployed to [Railway](https://railway.app): **[add your Railway URL here]**.
+
+Notes on the deployment:
+
+- `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL` and `DB_PATH` are set as
+  Railway environment variables — never committed, same as locally.
+- SQLite's file is created and seeded on startup the same way as local (`init_db()` +
+  `seed_db()` in the app's startup lifespan), so no manual database setup is needed on
+  the deployed instance.
+- Railway's free tier storage is ephemeral, so the seeded data resets on redeploys; this
+  is fine for a demo since `seed_db()` only inserts when the table is empty.
 
 ## Known limitations
 
